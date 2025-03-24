@@ -1,7 +1,0 @@
-rootProject.name = 'matfiaBack'
-
-include 'common'
-include 'app-api'
-include 'resv-api'
-include 'gateway'
-include 'discovery'
