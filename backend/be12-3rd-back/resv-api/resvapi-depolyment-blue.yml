@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resv-api-deployment-blue
+  labels:
+    type: backend-resv
+    deployment: blue
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      type: backend-resv
+      deployment: blue
+  strategy:
+    type: RollingUpdate
+  minReadySeconds: 10
+  template:
+    metadata:
+      labels:
+        type: backend-resv
+        deployment: blue
+    spec:
+      containers:
+        - name: resv-api-blue
+          image: gyuho0897/matfia-resv-api:1.1
+          ports:
+            - containerPort: 8081
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+      volumes:
+        - name: config-volume
+          configMap:
+            name: resv-api-config
+
+
