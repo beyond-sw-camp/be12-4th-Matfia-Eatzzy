@@ -40,7 +40,7 @@
 
 <h1> 🛠 시스템 아키텍처 </h1>
 
-<img src="/public/image/systemarchitecture.png" width="700" height="400" />
+<img src="/public/image/systemarchitecture.png" width="900" height="500" />
 <br>
 <br>
 
