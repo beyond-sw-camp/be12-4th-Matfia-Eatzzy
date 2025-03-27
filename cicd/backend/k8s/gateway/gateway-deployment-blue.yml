@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-deployment-blue
+  labels:
+    type: backend-gateway
+    deployment: blue
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      type: backend-gateway
+      deployment: blue
+  strategy:
+    type: RollingUpdate
+  minReadySeconds: 10
+  template:
+    metadata:
+      labels:
+        type: backend-gateway
+        deployment: blue
+    spec:
+      containers:
+        - name: gateway-blue
+          image: seyeonni/gateway:latest
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: gw-config
+              mountPath: /config
+      volumes:
+        - name: gw-config
+          configMap:
+            name: gw-config

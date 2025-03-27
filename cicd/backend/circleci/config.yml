@@ -1,0 +1,48 @@
+version: 2.1
+
+jobs:
+  build-and-push:
+    docker:
+      - image: cimg/openjdk:17.0
+    working_directory: ~/project
+    steps:
+      - checkout
+
+      - run:
+          name: Add Permission
+          command: chmod +x backend/gradlew
+
+      - run:
+          name: Gradle Build for all backend modules
+          command: |
+            for module in app-api resv-api gateway discovery; do
+              echo "🔧 Building JAR for $module"
+              ./backend/gradlew --project-dir backend :$module:bootJar
+            done
+
+      - setup_remote_docker:
+          docker_layer_caching: true
+
+      - run:
+          name: Docker Login
+          command: |
+            echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+
+      - run:
+          name: Build & Push all backend module images
+          command: |
+            TAG=0.1.$CIRCLE_BUILD_NUM
+
+            for module in app-api resv-api gateway discovery; do
+              echo "🔧 Building image for $module"
+              docker build -t $DOCKERHUB_USERNAME/$module:$TAG ./backend/$module
+
+              echo "🚀 Pushing image for $module"
+              docker push $DOCKERHUB_USERNAME/$module:$TAG
+            done
+
+workflows:
+  version: 2
+  build-and-push:
+    jobs:
+      - build-and-push

@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-deployment-green
+  labels:
+    type: backend-gateway
+    deployment: green
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      type: backend-gateway
+      deployment: green
+  strategy:
+    type: RollingUpdate
+  minReadySeconds: 10
+  template:
+    metadata:
+      labels:
+        type: backend-gateway
+        deployment: green
+    spec:
+      containers:
+        - name: gateway-green
+          image: seyeonni/gateway:latest
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: gw-config
+              mountPath: /config
+      volumes:
+        - name: gw-config
+          configMap:
+            name: gw-config

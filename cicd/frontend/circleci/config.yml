@@ -1,0 +1,99 @@
+version: 2.1
+
+jobs:
+  frontend-build:
+    docker:
+      - image: cimg/node:18.17
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Clean Install
+          command: |
+            cd frontend
+            rm -rf node_modules package-lock.json
+            npm install
+      - run:
+          name: Build Frontend
+          command: |
+            cd frontend
+            npm run build
+      - run:
+          name: Debug Build Output
+          command: |
+            ls -al frontend
+      - persist_to_workspace:
+          root: .
+          paths:
+            - frontend/dist
+
+  docker-build-and-push:
+    docker:
+      - image: cimg/base:2022.09
+        auth:
+          username: $DOCKERHUB_USERNAME
+          password: $DOCKERHUB_PASSWORD
+    working_directory: ~/project
+    steps:
+      - checkout
+      - attach_workspace:
+          at: ~/project
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - run:
+          name: Build Docker image
+          command: |
+            TAG=0.1.$CIRCLE_BUILD_NUM
+            docker build -t $DOCKERHUB_USERNAME/frontend:$TAG ./frontend
+      - run:
+          name: Push Docker image
+          command: |
+            TAG=0.1.$CIRCLE_BUILD_NUM
+            docker login -u $DOCKERHUB_USERNAME -p $DOCKERHUB_PASSWORD
+            docker push $DOCKERHUB_USERNAME/frontend:$TAG
+
+  # ssh-deploy:
+  #   docker:
+  #     - image: cimg/base:stable
+  #   working_directory: ~/project
+  #   steps:
+  #     - checkout
+  #     - run:
+  #         name: Replace image tag in deployment file
+  #         command: |
+  #           sed -i "s/latest/0.1.$CIRCLE_BUILD_NUM/g" cicd/frontend-deployment-b.yml
+  #     - run:
+  #         name: Copy deployment file to remote server
+  #         command: |
+  #           scp -o StrictHostKeyChecking=no cicd/frontend-deployment-b.yml test@192.0.3.10:/home/test/k8s/frontend-deployment-b.yml
+  #     - run:
+  #         name: Apply canary deployment + gradual traffic shift
+  #         command: |
+  #           ssh -o StrictHostKeyChecking=no test@192.0.3.10 \<< EOF
+  #             echo "[1] Apply Deployment"
+  #             kubectl apply -f /home/test/k8s/frontend-deployment-b.yml
+
+  #             echo "[2] Wait and set canary-weight to 50"
+  #             sleep 5
+  #             kubectl patch ingress frontend-ingress-canary -p '{"metadata":{"annotations":{"nginx.ingress.kubernetes.io/canary-weight":"50"}}}'
+
+  #             echo "[3] Wait and set canary-weight to 100"
+  #             sleep 5
+  #             kubectl patch ingress frontend-ingress-canary -p '{"metadata":{"annotations":{"nginx.ingress.kubernetes.io/canary-weight":"100"}}}'
+
+  #             echo "[4] Disable canary mode"
+  #             sleep 5
+  #             kubectl patch ingress frontend-ingress-canary -p '{"metadata":{"annotations":{"nginx.ingress.kubernetes.io/canary":"false"}}}'
+  #           EOF
+
+workflows:
+  version: 2
+  build-and-push:
+    jobs:
+      - frontend-build
+      - docker-build-and-push:
+          requires:
+            - frontend-build
+      # - ssh-deploy:
+      #     requires:
+      #       - docker-build-and-push

@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-discovery
+  labels:
+    type: backend-discovery
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      type: backend-discovery
+  template:
+    metadata:
+      labels:
+        type: backend-discovery
+    spec:
+      containers:
+        - name: discovery
+          image: seyeonni/discovery:latest
+          ports:
+            - containerPort: 8001
+          volumeMounts:
+            - name: discovery-config
+              mountPath: /config
+      volumes:
+        - name: discovery-config
+          configMap:
+            name: discovery-config

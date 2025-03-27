@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-api-deployment-blue
+  labels:
+    type: backend-app
+    deployment: blue
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      type: backend-app
+      deployment: blue
+  strategy:
+    type: RollingUpdate
+  minReadySeconds: 10
+  template:
+    metadata:
+      labels:
+        type: backend-app
+        deployment: blue
+    spec:
+      containers:
+        - name: app-api-blue
+          image: seyeonni/app-api:latest
+          ports:
+            - containerPort: 8081
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+      volumes:
+        - name: config-volume
+          configMap:
+            name: app-api-config

@@ -1,0 +1,166 @@
+pipeline {
+  agent any
+
+  environment {
+    CIRCLECI_TOKEN        = credentials('CIRCLECI_TOKEN')
+    BACKEND_PROJECT       = 'circleci/8eDo7gsovy8n4ZEdNpncs7/KwAaRbtqoqnubyNUgV7Fq1'
+    BACKEND_DEFINITION_ID = 'adf14913-c389-4688-81ed-8b4939dd4cdf'
+    DEPLOY_TARGET         = 'test@192.0.3.10'
+  }
+
+  stages {
+    stage('Trigger CircleCI Backend') {
+      steps {
+        script {
+          echo "🚀 Triggering CircleCI Backend Project"
+
+          def response = sh(
+            script: """
+              curl --silent --location 'https://circleci.com/api/v2/project/${BACKEND_PROJECT}/pipeline/run' \\
+              --header 'Circle-Token: ${CIRCLECI_TOKEN}' \\
+              --header 'Content-Type: application/json' \\
+              --data '{
+                "definition_id": "${BACKEND_DEFINITION_ID}",
+                "config": { "branch": "backend-main" },
+                "checkout": { "branch": "backend-main" }
+              }'
+            """,
+            returnStdout: true
+          ).trim()
+
+          def pipelineId = sh(
+            script: "echo '${response}' | jq -r '.id'",
+            returnStdout: true
+          ).trim()
+
+          writeFile file: 'pipeline_id.txt', text: pipelineId
+          echo "✅ Triggered Pipeline ID: ${pipelineId}"
+        }
+      }
+    }
+
+    stage('Poll CircleCI Pipeline Status') {
+      steps {
+        script {
+          def pipelineId = readFile('pipeline_id.txt').trim()
+          echo "⏳ Polling CircleCI Workflow Status (ID: ${pipelineId})"
+
+          def workflowId = sh(
+            script: """
+              curl --silent --location "https://circleci.com/api/v2/pipeline/${pipelineId}/workflow" \\
+              --header "Circle-Token: ${CIRCLECI_TOKEN}" | jq -r '.items[0].id'
+            """,
+            returnStdout: true
+          ).trim()
+
+          def status = ""
+          def maxRetries = 30
+          def retryCount = 0
+          def intervalSec = 10
+
+          while (true) {
+            sleep intervalSec
+            retryCount++
+
+            status = sh(
+              script: """
+                curl --silent --location "https://circleci.com/api/v2/workflow/${workflowId}" \\
+                --header "Circle-Token: ${CIRCLECI_TOKEN}" | jq -r '.status'
+              """,
+              returnStdout: true
+            ).trim()
+
+            echo "[${retryCount}] Workflow status: ${status}"
+
+            if (status == "success") {
+              echo "✅ Workflow completed successfully!"
+              break
+            }
+
+            if (status in ["failed", "failing", "error", "canceled", "unauthorized"]) {
+              error("❌ Workflow failed: ${status}")
+            }
+
+            if (retryCount >= maxRetries) {
+              error("⏰ Timed out waiting for workflow completion.")
+            }
+          }
+
+          def buildNumber = sh(
+            script: """
+              curl --silent --location "https://circleci.com/api/v2/workflow/${workflowId}/job" \\
+              --header "Circle-Token: ${CIRCLECI_TOKEN}" | jq -r '.items[] | select(.name == "build-and-push") | .job_number'
+            """,
+            returnStdout: true
+          ).trim()
+
+          echo "🐳 CircleCI Build Number: ${buildNumber}"
+          writeFile file: 'circleci_build_number.txt', text: buildNumber
+        }
+      }
+    }
+
+    stage('SSH Deploy to Kubernetes') {
+      steps {
+        script {
+          def buildTag = readFile('circleci_build_number.txt').trim()
+          echo "🚀 Deploying All YAMLs with tag: ${buildTag}"
+
+          sh """
+            for dir in cicd/backend/k8s/*; do
+              module=\$(basename \$dir)
+              echo "📦 Deploying YAMLs for module: \$module"
+
+              ssh -o StrictHostKeyChecking=no ${DEPLOY_TARGET} "mkdir -p /home/test/k8s/\$module"
+
+              for file in \$dir/*.yml; do
+                scp -o StrictHostKeyChecking=no \$file ${DEPLOY_TARGET}:/home/test/k8s/\$module/
+                ssh -o StrictHostKeyChecking=no ${DEPLOY_TARGET} "sed -i 's/latest/0.1.${buildTag}/g' /home/test/k8s/\$module/\$(basename \$file)"
+                ssh -o StrictHostKeyChecking=no ${DEPLOY_TARGET} "kubectl apply -f /home/test/k8s/\$module/\$(basename \$file)"
+              done
+            done
+          """
+
+          echo "🚦 Rolling update based on BUILD_ID"
+
+          sh """
+            even_or_odd=\$((BUILD_ID % 2))
+            echo "🔢 BUILD_ID: \$BUILD_ID → \$even_or_odd (0 = green, 1 = blue)"
+
+            if [ "\$even_or_odd" -eq 0 ]; then
+              echo "🟢 Activating GREEN deployments"
+
+              for svc in app-api resv-api gateway; do
+                ssh ${DEPLOY_TARGET} kubectl rollout status -n default -f /home/test/k8s/\$svc/\$svc-deployment-green.yml
+                ssh ${DEPLOY_TARGET} kubectl wait --for=condition=available -n default -f /home/test/k8s/\$svc/\$svc-deployment-green.yml --timeout=120s
+
+                # ✅ PATCH → APPLY (서비스)
+                ssh ${DEPLOY_TARGET} kubectl apply -f /home/test/k8s/\$svc/\$svc-service-green.yml
+
+                ssh ${DEPLOY_TARGET} kubectl scale deployment/\$svc-deployment-blue --replicas=0 -n default || true
+              done
+
+            else
+              echo "🔵 Activating BLUE deployments"
+
+              for svc in app-api resv-api gateway; do
+                ssh ${DEPLOY_TARGET} kubectl rollout status -n default -f /home/test/k8s/\$svc/\$svc-deployment-blue.yml
+                ssh ${DEPLOY_TARGET} kubectl wait --for=condition=available -n default -f /home/test/k8s/\$svc/\$svc-deployment-blue.yml --timeout=120s
+
+                # ✅ PATCH → APPLY (서비스)
+                ssh ${DEPLOY_TARGET} kubectl apply -f /home/test/k8s/\$svc/\$svc-service-blue.yml
+
+                ssh ${DEPLOY_TARGET} kubectl scale deployment/\$svc-deployment-green --replicas=0 -n default || true
+              done
+            fi
+
+
+            # 🟡 discovery 는 블루그린 없이 일반 배포
+            ssh ${DEPLOY_TARGET} kubectl rollout status -n default -f /home/test/k8s/discovery/discovery-deployment.yml
+            ssh ${DEPLOY_TARGET} kubectl apply -f /home/test/k8s/discovery/discovery-service.yml
+          """
+        }
+      }
+    }
+  }
+}

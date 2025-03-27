@@ -1,0 +1,140 @@
+pipeline {
+    agent any
+    environment {
+        CIRCLECI_TOKEN = credentials('CIRCLECI_TOKEN')
+        FRONTEND_PROJECT = 'circleci/8eDo7gsovy8n4ZEdNpncs7/Grs7V17X6iQXz9ZFuC9dMc'
+        FRONTEND_DEFINITION_ID = 'a7dd516f-c476-40fd-8177-2f4d4d50bdda'
+    }
+
+    stages {
+        stage('Trigger CircleCI Frontend') {
+            steps {
+                script {
+                    echo "🚀 Triggering CircleCI Frontend Project"
+
+                    def response = sh(
+                        script: """
+                            curl --silent --location 'https://circleci.com/api/v2/project/${FRONTEND_PROJECT}/pipeline/run' \\
+                            --header 'Circle-Token: ${CIRCLECI_TOKEN}' \\
+                            --header 'Content-Type: application/json' \\
+                            --data '{
+                                "definition_id": "${FRONTEND_DEFINITION_ID}",
+                                "config": { "branch": "frontend-main" },
+                                "checkout": { "branch": "frontend-main" }
+                            }'
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    def pipelineId = sh(
+                        script: "echo '${response}' | jq -r '.id'",
+                        returnStdout: true
+                    ).trim()
+
+                    writeFile file: 'frontend_pipeline_id.txt', text: pipelineId
+                    echo "✅ Triggered Pipeline ID: ${pipelineId}"
+                }
+            }
+        }
+
+        stage('Poll CircleCI Frontend Pipeline Status') {
+            steps {
+                script {
+                    def pipelineId = readFile('frontend_pipeline_id.txt').trim()
+                    echo "⏳ Polling CircleCI Workflow Status (ID: ${pipelineId})"
+
+                    def workflowId = sh(
+                        script: """
+                            curl --silent --location "https://circleci.com/api/v2/pipeline/${pipelineId}/workflow" \\
+                            --header "Circle-Token: ${CIRCLECI_TOKEN}" | jq -r '.items[0].id'
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    def status = ""
+                    def maxRetries = 30
+                    def retryCount = 0
+                    def intervalSec = 10
+
+                    while (true) {
+                        sleep intervalSec
+                        retryCount++
+
+                        status = sh(
+                            script: """
+                                curl --silent --location "https://circleci.com/api/v2/workflow/${workflowId}" \\
+                                --header "Circle-Token: ${CIRCLECI_TOKEN}" | jq -r '.status'
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        echo "[${retryCount}] Workflow status: ${status}"
+
+                        if (status == "success") {
+                            echo "✅ Workflow completed successfully!"
+                            break
+                        }
+
+                        if (status in ["failed", "failing", "error", "canceled", "unauthorized"]) {
+                            error("❌ Workflow failed: ${status}")
+                        }
+
+                        if (retryCount >= maxRetries) {
+                            error("⏰ Timed out waiting for workflow completion.")
+                        }
+                    }
+
+                    def buildNumber = sh(
+                        script: """
+                            curl --silent --location "https://circleci.com/api/v2/workflow/${workflowId}/job" \\
+                            --header "Circle-Token: ${CIRCLECI_TOKEN}" | jq -r '.items[] | select(.name == "build-and-push") | .job_number'
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    echo "🐳 CircleCI Build Number: ${buildNumber}"
+                    writeFile file: 'frontend_circleci_build_number.txt', text: buildNumber
+                }
+            }
+        }
+
+        stage('Deploy Canary B') {
+    steps {
+        script {
+            sshPipelineStep(
+                remote: [
+                    name: 'k8s-server',
+                    host: '192.0.3.10',
+                    user: 'test',
+                    identityFile: '/home/jenkins/.ssh/id_rsa',
+                    allowAnyHosts: true
+                ],
+                command: '''
+                    echo "[0] Apply Ingress Canary Configuration"
+                    kubectl apply -f k8s/frontend-ingress-canary.yml
+
+                    echo "[1] Deploy B (Keep A running)"
+                    kubectl apply -f k8s/frontend-deployment-b.yml
+
+                    echo "[2] Wait and shift 50% traffic to B"
+                    sleep 5
+                    kubectl patch ingress frontend-ingress-canary -p '{"metadata":{"annotations":{"nginx.ingress.kubernetes.io/canary-weight":"50"}}}'
+
+                    echo "[3] Wait and shift 100% traffic to B"
+                    sleep 5
+                    kubectl patch ingress frontend-ingress-canary -p '{"metadata":{"annotations":{"nginx.ingress.kubernetes.io/canary-weight":"100"}}}'
+
+                    echo "[4] Disable canary mode"
+                    sleep 5
+                    kubectl patch ingress frontend-ingress-canary -p '{"metadata":{"annotations":{"nginx.ingress.kubernetes.io/canary":"false"}}}'
+
+                    echo "[5] Scale down A (Optional)"
+                    kubectl scale deployment frontend-deployment-a --replicas=0
+                    
+                '''
+            )
+        }
+    }
+}
+    }
+}

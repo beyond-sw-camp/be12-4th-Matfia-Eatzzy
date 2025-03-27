@@ -1,0 +1,29 @@
+Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-a
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      type: frontend
+      deployment: a
+  template:
+    metadata:
+      labels:
+        type: frontend
+        deployment: a
+    spec:
+      containers:
+      - name: frontend-a
+        image: seyeonni/frontend:latest
+        ports:
+        - containerPort: 80
+        volumeMounts:
+          - name: config
+            mountPath: /etc/nginx/conf.d/
+      volumes:
+        - name: config
+          configMap:
+            name: nginx-config
