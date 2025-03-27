@@ -1,0 +1,23 @@
+all:
+  hosts:
+    es2:
+      ansible_host: 192.0.3.14
+    es3:
+      ansible_host: 192.0.3.15
+    es4:
+      ansible_host: 192.0.3.16
+    es5:
+      ansible_host: 192.0.3.18
+  children:
+    master:
+      hosts:
+        es2
+    data01:
+      hosts:
+        es3
+    data02:
+      hosts:
+        es4
+    data03:
+      hosts:
+        es5

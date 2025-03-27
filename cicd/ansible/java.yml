@@ -1,0 +1,8 @@
+- hosts: all
+  become: yes
+  tasks:
+    - name: Install JDK 11
+      apt:
+        update_cache: yes
+        name: openjdk-11-jdk
+        state: present
